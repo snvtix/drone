@@ -12,45 +12,83 @@
 ###########
 
 ##### Suggested clean drone startup sequence #####
-import time, sys
+import time
 import ps_drone
-import cv2
+import multiprocessing
 
-drone = ps_drone.Drone()
-drone.startup()
+def main():
 
-drone.reset()
-while drone.getBattery()[0] == -1:
-    time.sleep(0.1)
+    drone = ps_drone.Drone()
 
-print("Battery: " + str(drone.getBattery()[0]) + "%  " + str(drone.getBattery()[1]))
+    drone.debug = True
+    drone.showCommands = True
 
-drone.useDemoMode(True)
-drone.setConfigAllID()
-drone.sdVideo()
-drone.frontCam()
+    drone.startup()
+    drone.reset()
+    
+    print("CONFIG:")
+    drone.getConfig()
 
-CDC = drone.ConfigDataCount
-while CDC == drone.ConfigDataCount:
-    time.sleep(0.0001)
+    time.sleep(2)
 
-drone.startVideo()
+    for x in drone.ConfigData:
+        if "version" in x[0].lower():
+            print(x)
 
-print("Nacisnij 'q' w oknie wideo, aby zakonczyc.")
-while True:
-    img = drone.getImage() # Pobranie surowej klatki bezpośrednio z drona
-    if img is not None:
-        cv2.imshow("AR.Drone Video", img)
-        
-    # Sterowanie i zamknięcie przez okno OpenCV
-    key = cv2.waitKey(1) & 0xFF
-    if key == ord('q'):
-        break
-    elif key == ord(' '):
-        # Przełączanie kamery
-        ground = not getattr(drone, 'ground_state', False)
-        drone.ground_state = ground
-        drone.groundVideo(ground)
+    while drone.getBattery()[0] == -1:
+        time.sleep(0.1)
 
-cv2.destroyAllWindows()
-drone.stopVideo()
+    print("Battery:", drone.getBattery())
+
+    drone.useDemoMode(True)
+
+    drone.setConfigAllID()
+
+    drone.sdVideo()
+    drone.frontCam()
+
+    print("\nCzekam 5 sekund na konfigurację...\n")
+    time.sleep(5)
+
+    print("\n=== VIDEO CONFIG ===")
+
+    for item in drone.ConfigData:
+        try:
+            if "video" in item[0].lower():
+                print(item)
+        except:
+            pass
+
+    print("\n=== DRONE STATE ===")
+    print("Camera Mask :", drone.State[7])
+    print("Video Thread:", drone.State[26])
+
+    print("\n=== START VIDEO ===")
+
+    drone.startVideo()
+    drone.getNDpackage(["video_stream"])
+    
+    print("\n=== PROCESY ===")
+    
+    for p in multiprocessing.active_children():
+        print(p)
+
+    for i in range(20):
+
+        print(
+            f"{i:02d}",
+            "Camera =", drone.State[7],
+            "Video =", drone.State[26],
+            "Ready =", drone.VideoReady,
+            "Count =", drone.VideoImageCount
+        )
+        print(drone.NavData.keys())
+
+        time.sleep(1)
+
+    drone.stopVideo()
+    drone.shutdown()
+
+
+if __name__ == "__main__":
+    main()

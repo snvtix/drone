@@ -163,7 +163,7 @@ class Drone(object):
 				time.sleep(0.05)
 			time.sleep(0.01)
 
-	###### Clean Shutdown
+###### Clean Shutdown
 	def shutdown(self):
 		if self.__shutdown:	sys.exit()
 		self.__shutdown = True
@@ -172,10 +172,13 @@ class Drone(object):
 		self.thrust(0,0,0,0)
 		try:			self.__NavData_pipe.send("die!")
 		except:			pass
-		self.__Video_pipe.send("uninit")
-		t=time.time()
-		while			self.__VideoReady and (time.time()-t)<5:	time.sleep(0.1)
-		try:			self.__Video_pipe.send("die!")
+		
+		# Zabezpieczone, jeśli procesy wideo zostały wyłączone w startup
+		try:
+			self.__Video_pipe.send("uninit")
+			t=time.time()
+			while self.__VideoReady and (time.time()-t)<5:	time.sleep(0.1)
+			self.__Video_pipe.send("die!")
 		except:			pass
 
 		time.sleep(0.5)
@@ -191,9 +194,11 @@ class Drone(object):
 		except:			pass
 		try:			self.__threadReceiveData.join()
 		except:			pass
-		self.__keepalive.cancel()
+		try:
+			self.__keepalive.cancel()
+		except:			pass
 		sys.exit()
-
+		
 ##############################################################=-
 ### Make internal variables to external read-only variables ###=-
 ##############################################################=-
@@ -1038,87 +1043,69 @@ def watchdogV(parentPID, ownPID):
 
 # Thread to capture, decode and display the video-stream
 def vCapture(VidPipePath, parent_pipe):
-	import cv2
-	global vCruns, commitsuicideV, showVid, lockV, debugV
+    import cv2
+    import time
 
-	show = 		False
-	hide =		True
-	vCruns =	True
-	t = 		time.time()
-	parent_pipe.send(("VideoUp",0,0,0))
-	capture = 	cv2.VideoCapture(VidPipePath)
-#	capture = 	cv2.VideoCapture("tcp://192.168.1.1:5555")
-	ImgCount =	0
-	if debugV:	print("CAPTURE: "+str(time.time()-t))
-	time.sleep(0.2)
-	parent_pipe.send(("foundCodec",0,0,0))
-	time.sleep(0.2)
-	declag =	time.time()
-	count =		-3
-	imageXsize = 	0
-	imageYsize = 	0
-	windowName = 	"PS-Drone"
-	codecOK = 		False
-	lastKey =		""
-	cc=0
+    global vCruns, commitsuicideV, showVid, lockV, debugV
 
-	while not commitsuicideV:
-		decTimeRev = 		time.time()
-		receiveWatchdog = threading.Timer(2.0, VideoReceiveWatchdog, [parent_pipe,"vCapture", debugV])	# Resets video if something hangs
-		receiveWatchdog.start()
-		success, image = 	capture.read()
-		cc	+=1
-		receiveWatchdog.cancel()
-		decTime =			decTimeRev-time.time()
-		tlag =				time.time()-declag
+    show = False
+    hide = True
+    vCruns = True
 
-		if not codecOK and success:
-			
-			try:
-				if image.shape[:2]==(360,640) or image.shape[:2]==(368,640) or image.shape[:2]==(720,1280) or image.shape[:2]==(1080,1920):
-					codecOK = True
-					if debugV:	print("Codec seems OK")
-				else:
-					if debugV:	print("Codec failure")
-					parent_pipe.send(("reset",0,0,0))
-					commitsuicideV = True
-			except:
-					if debugV:	print("Codec failure")
-					parent_pipe.send(("reset",0,0,0))
-					commitsuicideV = True
-					codecOK	= False
-		if success and codecOK:
-			if not (imageXsize == image.shape[1]) or not (imageYsize == image.shape[0]):
-				cv2.destroyAllWindows()
-				imageYsize, imageXsize = image.shape[:2]
-				windowName = "PS-Drone - "+str(imageXsize)+"x"+str(imageYsize)
-			if success:
-				if tlag > 0.02:	count+=1
-				if count > 0:
-					ImgCount+=1
-					if not show and not hide:
-						cv2.destroyAllWindows()
-						hide = True
-					if show:
-						cv2.imshow(windowName, image)
-						key=cv2.waitKey(1)
-						if key>-1:	parent_pipe.send(("keypressed",0,chr(key%256),0))
-					parent_pipe.send(("Image",ImgCount,image,decTime))
-			else:	time.sleep(0.01)
-			declag = time.time()
+    print("VCAPTURE START")
 
-			if showVid:
-				if not show:
-					show=True
-					cv2.destroyAllWindows()
-			else:
-				if show:
-					show=False
-					cv2.destroyAllWindows()
-	vCruns = False
-	cv2.destroyAllWindows()
-	capture.release()
-	if debugV:	print("vCapture-Thread :    committed suicide")
+    # Test 1 - bezpośrednio z TCP drona
+    capture = cv2.VideoCapture("tcp://192.168.1.1:5555")
+
+    print("Opened:", capture.isOpened())
+
+    if not capture.isOpened():
+        print("VIDEO OPEN FAILED")
+        return
+
+    parent_pipe.send(("VideoUp", 0, 0, 0))
+    parent_pipe.send(("foundCodec", 0, 0, 0))
+
+    ImgCount = 0
+    imageXsize = 0
+    imageYsize = 0
+    windowName = "PS-Drone"
+
+    while not commitsuicideV:
+
+        success, image = capture.read()
+
+        if ImgCount % 50 == 0:
+            print("READ:", success)
+
+        if not success:
+            time.sleep(0.01)
+            continue
+
+        ImgCount += 1
+
+        if imageXsize != image.shape[1] or imageYsize != image.shape[0]:
+            imageYsize, imageXsize = image.shape[:2]
+            print(f"Frame size: {imageXsize}x{imageYsize}")
+
+        if showVid:
+            cv2.imshow(windowName, image)
+
+            key = cv2.waitKey(1)
+
+            if key > -1:
+                parent_pipe.send(
+                    ("keypressed", 0, chr(key % 256), 0)
+                )
+
+        parent_pipe.send(
+            ("Image", ImgCount, image, 0)
+        )
+
+    capture.release()
+    cv2.destroyAllWindows()
+
+    print("VCAPTURE END")
 
 ### Process to decode the videostream in the FIFO-Pipe, stored there from main-loop.
 # Storing and decoding must not be processed in the same process, thats why decoding is external.
@@ -1159,6 +1146,8 @@ def VideoReceiveWatchdog(parent_pipe,name, debugV):
 	parent_pipe.send(("reset",0,0,0))
 
 def mainloopV(DroneIP, VideoPort, VidPipePath, parent_pipe, parentPID):
+	print("MAINLOOP VIDEO START")
+	
 	inited, preinited, suicide, debugV, showCommands, slowVideo = False, False, 0, False, False, False
 	rawVideoFrame, VidStreamSnippet, VidStreamSnippetAvalible, iFrame, lastIFrame = "", "", False, False, False
 	saveVideo, unsureMode, searchCodecTime, frameRepeat, burstFrameCount = False, True, 0, 1, 0
@@ -1224,6 +1213,7 @@ def mainloopV(DroneIP, VideoPort, VidPipePath, parent_pipe, parentPID):
 					debugV = False
 					parent_pipe.send("undebug")
 				elif cmd == "init" and not inited and not preinited:
+					print("VIDEO INIT RECEIVED")
 					preinited = True
 					try:
 						os.mkfifo(VidPipePath)
@@ -1235,6 +1225,7 @@ def mainloopV(DroneIP, VideoPort, VidPipePath, parent_pipe, parentPID):
 						foundCodec = True
 					parent_pipe.send("vDecProc")
 				elif cmd == "vDecProcON":
+					print("VDECPROC ON")
 					rawVideoFrame		= ""
 					VidStreamSnippet	= ""
 					iFrame, lastIFrame	= False, False
@@ -1245,7 +1236,8 @@ def mainloopV(DroneIP, VideoPort, VidPipePath, parent_pipe, parentPID):
 						vstream_pipe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 						vstream_pipe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)	# Allow to reuse the address
 						vstream_pipe.setblocking(0)
-						vstream_pipe.connect_ex((DroneIP,VideoPort))
+						ret = vstream_pipe.connect_ex((DroneIP,VideoPort))
+						print("CONNECT_EX =", ret)
 						pipes.append(vstream_pipe)
 					write2pipe = open(VidPipePath,"wb",buffering=0)
 					suicide = False
@@ -1288,9 +1280,11 @@ def mainloopV(DroneIP, VideoPort, VidPipePath, parent_pipe, parentPID):
 			#	 will be send to the decoder, till the proper decoder for the videostream is found.
 			# In case of a slow or midspeed-video, only a single or a few copied I-frames are sent to the decoder.
 			if ip == vstream_pipe:
+				print("VIDEO SOCKET READY")
 				receiveWatchdog = threading.Timer(2.0, VideoReceiveWatchdog, [parent_pipe,"Video Mainloop", debugV,])	# Resets video if something hangs
 				receiveWatchdog.start()
 				videoPackage	= vstream_pipe.recv(65535)
+				print("VIDEO BYTES =", len(videoPackage))
 				receiveWatchdog.cancel()
 				lenVideoPackage	=len(videoPackage)
 				if lenVideoPackage == 0:		commitsuicideV = True
@@ -1345,6 +1339,7 @@ def mainloopV(DroneIP, VideoPort, VidPipePath, parent_pipe, parentPID):
 							for i in range(0,boost):
 								try:
 									write2pipe.write(rawVideoFrame)
+									print("WRITE", len(videoPackage))
 									write2pipe.flush()
 								except: pass	#print("Boost ERROR")
 							burstFrameCount+=1
